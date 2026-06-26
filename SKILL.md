@@ -25,6 +25,7 @@ Do not invent prices, contract codes, inventories, warehouse receipts, basis, ne
 - For trade plans, include direction bias, trigger, stop loss, invalidation condition, target/management idea, and risk caveat.
 - Clearly mark whether the view is based on complete data, partial data, or qualitative reasoning.
 - Prefer the rendered draft's calculated quote, technical levels, and data gaps over memory. Refine the prose, but do not overwrite sourced values without stronger evidence.
+- If the script provides structured inventory, warehouse receipt, or basis data, use those fields directly in the basic-fundamentals section and only browse to corroborate or fill remaining gaps.
 - Include: `本内容仅供研究辅助，不构成投资建议。`
 - For comparison requests, analyze each requested variety with the same fields and finish with relative strength, cleaner setup, and key risk.
 

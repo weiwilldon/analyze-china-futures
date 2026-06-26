@@ -74,6 +74,51 @@ def status_summary(statuses):
     return useful, degraded
 
 
+def fundamental_lines(snapshot):
+    fundamentals = snapshot.get("fundamentals") or {}
+    inventory = fundamentals.get("inventory") or {}
+    receipt = fundamentals.get("warehouse_receipt") or {}
+    basis = fundamentals.get("spot_basis") or {}
+    lines = []
+    if inventory:
+        lines.append(
+            f"- 库存：{fmt(inventory.get('value'))}，增减 {fmt(inventory.get('change'))}，日期 {fmt(inventory.get('date'))}，来源 {inventory.get('source', '缺失')}。"
+        )
+    else:
+        lines.append("- 库存：缺失。")
+    if receipt:
+        matched = receipt.get("matched_rows") or {}
+        row_count = sum(len(v) for v in matched.values() if isinstance(v, list))
+        lines.append(
+            f"- 仓单：已抓取 {fmt(receipt.get('date'))} 郑商所仓单匹配记录 {row_count} 条，来源 {receipt.get('source', '缺失')}。"
+        )
+    else:
+        lines.append("- 仓单：缺失。")
+    if basis:
+        lines.append(
+            f"- 现货/基差：现货 {fmt(basis.get('spot'))}，期货 {fmt(basis.get('futures'))}，基差 {fmt(basis.get('basis'))}，来源 {basis.get('source', '缺失')}。"
+        )
+    else:
+        lines.append("- 现货/基差：缺失。")
+    return lines
+
+
+def missing_risk_text(missing):
+    missing_text = " ".join(missing or [])
+    items = []
+    if "inventory" in missing_text:
+        items.append("库存")
+    if "warehouse_receipt" in missing_text:
+        items.append("仓单")
+    if "spot_basis" in missing_text:
+        items.append("基差")
+    if "news" in missing_text:
+        items.append("新闻")
+    if not items:
+        return "盘中政策、供需或宏观事件改变预期。"
+    return "、".join(items) + "仍有缺口，基本面判断需降权。"
+
+
 def render(snapshot):
     meta = snapshot.get("metadata") or {}
     normalized = snapshot.get("normalized") or {}
@@ -90,6 +135,7 @@ def render(snapshot):
     ma5 = tech.get("ma5")
     ma20 = tech.get("ma20")
     open_interest = quote.get("open_interest")
+    fundamentals_text = fundamental_lines(snapshot)
 
     lines = [
         f"# 中国期货日报：{instrument}（{meta.get('analysis_date', '未知日期')}）",
@@ -101,7 +147,7 @@ def render(snapshot):
         f"- 方向判断：{bias}",
         f"- 置信度：{confidence(snapshot)}",
         f"- 今日关键变量：{fmt(support)} 支撑、{fmt(ma5)} 附近 MA5、{fmt(resistance)} 压力、成交持仓变化。",
-        "- 最大风险：库存、仓单、基差和最新产业新闻未由本地脚本完整抓取，基本面判断需降权。" if missing else "- 最大风险：盘中政策、供需或宏观事件改变预期。",
+        f"- 最大风险：{missing_risk_text(missing)}",
         "",
         "## 2. 行情概览",
         "| 字段 | 数值 |",
@@ -125,7 +171,7 @@ def render(snapshot):
         f"- 波动与量能：成交量 {fmt(quote.get('volume'))}，持仓量 {fmt(open_interest)}；若价格方向与持仓变化背离，优先按震荡修复处理。",
         "",
         "## 4. 基本面与资金",
-        "- 基差/库存/仓单：本地脚本未稳定获取，发布级报告需补充交易所、产业资讯或现货数据源。",
+        *fundamentals_text,
         f"- 成交持仓：当前持仓 {fmt(open_interest)}，结合价格位置判断资金确认度。",
         "- 新闻与宏观：本地脚本不自动编写新闻结论；需要使用当前、可引用来源补充。",
         "",

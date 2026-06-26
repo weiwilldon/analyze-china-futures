@@ -12,6 +12,7 @@
 - Detect TqSdk by import, not by assuming installation.
 - Treat credentials as optional. Common environment variables are `TQSDK_USER` and `TQSDK_PASSWORD`; if they are absent, skip TqSdk without failing the whole report.
 - Use continuous main contracts when the user names a variety rather than an exact contract. For example, map 螺纹钢/RB to `KQ.m@SHFE.rb` when possible.
+- Use uppercase product codes for CZCE and CFFEX continuous contracts, such as `KQ.m@CZCE.FG`; use lowercase for SHFE/DCE/INE where TqSdk expects lowercase, such as `KQ.m@DCE.jm`.
 - When TqSdk quote fields omit daily change or high/low, enrich them from the latest daily bar if it is available and mark the source detail.
 - Close API sessions after fetching data.
 
@@ -20,6 +21,7 @@
 - Try AKShare dynamically because function names and signatures can change.
 - Capture source names, errors, and missing fields in the JSON snapshot.
 - Prefer data freshness over breadth for daily reports. A partial current quote is more useful than stale complete data.
+- Use `futures_inventory_em` for inventory, `futures_czce_warehouse_receipt` for CZCE warehouse receipts, and `futures_spot_price`/`futures_spot_price_daily` for spot/basis when available.
 
 ## Missing Data Rules
 

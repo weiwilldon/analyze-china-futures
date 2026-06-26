@@ -64,6 +64,12 @@ PRODUCTS = {
 }
 
 
+def tq_product_symbol(exchange, lower):
+    if exchange in {"CZCE", "CFFEX"}:
+        return lower.upper()
+    return lower.lower()
+
+
 def disable_proxy_for_public_sources(snapshot):
     if os.getenv("CHINA_FUTURES_USE_PROXY"):
         snapshot["data_source_status"]["proxy"] = "kept: CHINA_FUTURES_USE_PROXY is set"
@@ -81,6 +87,14 @@ def today_shanghai():
     return dt.datetime.utcnow().date().isoformat()
 
 
+def date_candidates(analysis_date, days=7):
+    try:
+        start = dt.datetime.strptime(analysis_date, "%Y-%m-%d").date()
+    except Exception:
+        start = dt.date.today()
+    return [(start - dt.timedelta(days=i)).strftime("%Y%m%d") for i in range(days)]
+
+
 def normalize_instrument(raw):
     value = raw.strip()
     key = value.lower()
@@ -88,12 +102,13 @@ def normalize_instrument(raw):
     if exact:
         prefix = exact.group(1).upper()
         product = PRODUCTS.get(prefix.lower(), (prefix, None, prefix.lower()))
+        tq_prefix = tq_product_symbol(product[1], product[2]) if product[1] else prefix
         return {
             "input": raw,
             "product_code": prefix,
             "exchange": product[1],
             "ak_symbol": prefix,
-            "tq_symbol": f"{product[1]}.{prefix.lower()}{exact.group(2)}" if product[1] else None,
+            "tq_symbol": f"{product[1]}.{tq_prefix}{exact.group(2)}" if product[1] else None,
             "is_exact_contract": True,
         }
     product = PRODUCTS.get(key) or PRODUCTS.get(value)
@@ -104,7 +119,7 @@ def normalize_instrument(raw):
             "product_code": code,
             "exchange": exchange,
             "ak_symbol": code,
-            "tq_symbol": f"KQ.m@{exchange}.{lower}" if exchange else None,
+            "tq_symbol": f"KQ.m@{exchange}.{tq_product_symbol(exchange, lower)}" if exchange else None,
             "is_exact_contract": False,
         }
     prefix = re.sub(r"[^A-Za-z]", "", value).upper() or value.upper()
@@ -155,6 +170,12 @@ def frame_records(obj, limit=None):
             item[str(key)] = value
         cleaned.append(item)
     return cleaned
+
+
+def latest_record(records, date_key_candidates=("日期", "date")):
+    if not records:
+        return None
+    return records[-1]
 
 
 def update_quote_from_row(snapshot, row, source):
@@ -312,6 +333,112 @@ def fetch_with_akshare(snapshot, normalized):
         snapshot["data_source_status"]["akshare_daily"] = "no daily bars returned"
 
 
+def first_existing(row, keys):
+    for key in keys:
+        if key in row and row[key] not in (None, ""):
+            return row[key]
+    return None
+
+
+def fetch_fundamentals_with_akshare(snapshot, normalized):
+    try:
+        import akshare as ak
+    except Exception as exc:
+        snapshot["data_source_status"]["akshare_fundamentals"] = f"unavailable: {exc}"
+        return
+
+    code = normalized.get("ak_symbol")
+    name = normalized.get("input")
+    exchange = normalized.get("exchange")
+    analysis_date = (snapshot.get("metadata") or {}).get("analysis_date") or today_shanghai()
+    compact_date = analysis_date.replace("-", "")
+    fundamentals = snapshot["fundamentals"]
+    errors = []
+
+    inventory, err = try_call(ak.futures_inventory_em, symbol=code)
+    if err:
+        inventory, err = try_call(ak.futures_inventory_em, symbol=name)
+    if err:
+        errors.append(f"inventory: {err}")
+    else:
+        records = frame_records(inventory)
+        record = latest_record(records)
+        if record:
+            fundamentals["inventory"] = {
+                "source": "AKShare.futures_inventory_em",
+                "date": first_existing(record, ["日期", "date"]),
+                "value": as_float(first_existing(record, ["库存", "inventory"])),
+                "change": as_float(first_existing(record, ["增减", "change"])),
+                "unit": "source_unit",
+                "raw": record,
+            }
+
+    spot = None
+    spot_date = None
+    err = None
+    for candidate_date in date_candidates(analysis_date):
+        spot, err = try_call(ak.futures_spot_price, date=candidate_date, vars_list=[code])
+        if not err and frame_records(spot):
+            spot_date = candidate_date
+            break
+        spot, err2 = try_call(ak.futures_spot_price_daily, start_day=candidate_date, end_day=candidate_date, vars_list=[code])
+        err = err2 if err2 else err
+        if not err and frame_records(spot):
+            spot_date = candidate_date
+            break
+    records = frame_records(spot)
+    if records:
+        record = records[-1]
+        fundamentals["spot_basis"] = {
+            "source": "AKShare.futures_spot_price",
+            "date": first_existing(record, ["日期", "date"]) or spot_date,
+            "spot": as_float(first_existing(record, ["现货价格", "现货价", "spot_price"])),
+            "futures": as_float(first_existing(record, ["主力合约价格", "期货价格", "futures_price"])),
+            "basis": as_float(first_existing(record, ["基差", "basis"])),
+            "raw": record,
+        }
+    elif err:
+        errors.append(f"spot_basis: {err}")
+    else:
+        errors.append("spot_basis: no rows returned")
+
+    if exchange == "CZCE":
+        receipt = None
+        receipt_date = None
+        err = None
+        for candidate_date in date_candidates(analysis_date):
+            receipt, err = try_call(ak.futures_czce_warehouse_receipt, date=candidate_date)
+            if not err:
+                receipt_date = candidate_date
+                break
+        if not err and receipt is not None:
+            receipt_summary = {}
+            if isinstance(receipt, dict):
+                for key, value in receipt.items():
+                    records = frame_records(value)
+                    matched = [row for row in records if code in str(row).upper() or str(name) in str(row)]
+                    if matched:
+                        receipt_summary[str(key)] = matched[:10]
+            else:
+                records = frame_records(receipt)
+                receipt_summary["rows"] = [row for row in records if code in str(row).upper() or str(name) in str(row)][:10]
+            if receipt_summary:
+                fundamentals["warehouse_receipt"] = {
+                    "source": "AKShare.futures_czce_warehouse_receipt",
+                    "date": receipt_date,
+                    "matched_rows": receipt_summary,
+                }
+            else:
+                errors.append("warehouse_receipt: no matching rows returned")
+        elif err:
+            errors.append(f"warehouse_receipt: {err}")
+
+    if errors:
+        snapshot["data_source_status"]["akshare_fundamentals"] = "; ".join(errors[:4])
+    else:
+        snapshot["data_source_status"]["akshare_fundamentals"] = "ok"
+
+
 def compute_technical(snapshot):
     bars = snapshot.get("daily_bars") or []
     closes = []
@@ -409,8 +536,13 @@ def finalize_missing(snapshot):
             snapshot["missing_reasons"].append(f"quote.{field}: unavailable from configured data sources")
     if not snapshot.get("daily_bars"):
         snapshot["missing_reasons"].append("daily_bars: unavailable from configured data sources")
-    if not snapshot["fundamentals"]:
-        snapshot["missing_reasons"].append("fundamentals: not fetched by local script; use exchange/current web sources if needed")
+    fundamentals = snapshot["fundamentals"]
+    if not fundamentals.get("inventory"):
+        snapshot["missing_reasons"].append("fundamentals.inventory: unavailable from configured data sources")
+    if not fundamentals.get("warehouse_receipt"):
+        snapshot["missing_reasons"].append("fundamentals.warehouse_receipt: unavailable from configured data sources")
+    if not fundamentals.get("spot_basis"):
+        snapshot["missing_reasons"].append("fundamentals.spot_basis: unavailable from configured data sources")
     if not snapshot["news"]:
         snapshot["missing_reasons"].append("news: not fetched by local script; use current source-backed web search if needed")
 
@@ -453,6 +585,7 @@ def build_snapshot(args):
     fetch_with_tqsdk(snapshot, normalized, want_tq=not args.no_tqsdk)
     if snapshot["quote"].get("last") is None or not snapshot.get("daily_bars"):
         fetch_with_akshare(snapshot, normalized)
+    fetch_fundamentals_with_akshare(snapshot, normalized)
     compute_technical(snapshot)
     enrich_quote_from_daily_bars(snapshot)
     fill_quote_from_daily_bars(snapshot)

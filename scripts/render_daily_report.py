@@ -20,6 +20,17 @@ def fmt(value, suffix="", digits=2):
 
 
 def quality(snapshot):
+    completeness = snapshot.get("data_completeness") or {}
+    total = completeness.get("required_total")
+    ok = completeness.get("required_ok")
+    if total:
+        label = f"{ok}/{total}"
+        ratio = (ok or 0) / total
+        if ratio >= 0.9:
+            return f"较完整（{label}）"
+        if ratio >= 0.6:
+            return f"部分完整（{label}）"
+        return f"不足（{label}）"
     missing = snapshot.get("missing_reasons") or []
     quote = snapshot.get("quote") or {}
     has_core_quote = quote.get("last") is not None and quote.get("volume") is not None and quote.get("open_interest") is not None
@@ -62,15 +73,16 @@ def status_summary(statuses):
     useful = []
     degraded = []
     for key, value in (statuses or {}).items():
-        if value == "ok":
-            useful.append(key)
-        elif key == "proxy":
+        if key == "proxy":
             continue
-        else:
-            text = str(value)
-            if len(text) > 180:
-                text = text[:177].rstrip() + "..."
-            degraded.append(f"{key}: {text}")
+        text = str(value)
+        text_lower = text.lower()
+        if text == "ok" or text_lower.startswith("ok") or " ok " in f" {text_lower} " or "ok via" in text_lower:
+            useful.append(f"{key}: {text}")
+            continue
+        if len(text) > 180:
+            text = text[:177].rstrip() + "..."
+        degraded.append(f"{key}: {text}")
     return useful, degraded
 
 
@@ -79,6 +91,7 @@ def fundamental_lines(snapshot):
     inventory = fundamentals.get("inventory") or {}
     receipt = fundamentals.get("warehouse_receipt") or {}
     basis = fundamentals.get("spot_basis") or {}
+    position = fundamentals.get("position_rank") or {}
     lines = []
     if inventory:
         lines.append(
@@ -100,6 +113,31 @@ def fundamental_lines(snapshot):
         )
     else:
         lines.append("- 现货/基差：缺失。")
+    if position:
+        matched = position.get("matched") or {}
+        first = next(iter(matched.values()), {}) if matched else {}
+        if isinstance(first, list):
+            first = {"top_rows": first}
+        summary = first.get("summary") if isinstance(first, dict) else {}
+        summary = summary or {}
+        lines.append(
+            f"- 席位持仓：日期 {fmt(position.get('date'))}，前排成交 {fmt(summary.get('top_volume'))}，前排多单 {fmt(summary.get('top_long_open_interest'))}，前排空单 {fmt(summary.get('top_short_open_interest'))}，来源 {position.get('source', '缺失')}。"
+        )
+    else:
+        lines.append("- 席位持仓：缺失。")
+    return lines
+
+
+def news_lines(snapshot):
+    news = snapshot.get("news") or []
+    if not news:
+        return ["- 新闻/快讯：缺失。"]
+    lines = []
+    for item in news[:5]:
+        title = item.get("title") or item.get("content") or item.get("introduction") or item.get("text") or "未命名新闻"
+        when = item.get("time") or item.get("pub_time") or item.get("display_time")
+        source = item.get("source") or "Jin10"
+        lines.append(f"- {fmt(when)}｜{source}｜{title}")
     return lines
 
 
@@ -119,6 +157,38 @@ def missing_risk_text(missing):
     return "、".join(items) + "仍有缺口，基本面判断需降权。"
 
 
+def supplement_error_lines(snapshot):
+    errors = snapshot.get("supplement_errors") or []
+    if not errors:
+        return []
+    lines = ["", "### 补充数据源错误分类"]
+    for item in errors[:8]:
+        lines.append(
+            f"- {item.get('field', 'unknown')}｜{item.get('source', 'unknown')}｜{item.get('category', 'source_error')}｜{item.get('message', '')}"
+        )
+    return lines
+
+
+def news_coverage_lines(snapshot):
+    coverage = snapshot.get("news_coverage") or {}
+    tools = coverage.get("tools") or {}
+    if not tools:
+        return []
+    ok_tools = [name for name, row in tools.items() if isinstance(row, dict) and row.get("ok")]
+    lines = ["", "### Jin10 MCP 新闻覆盖"]
+    lines.append("- 关键词：" + ("、".join(coverage.get("keywords") or []) or "缺失"))
+    lines.append("- 可用工具：" + ("、".join(ok_tools) if ok_tools else "无"))
+    for name in ("search_flash", "search_news", "list_flash", "list_news", "get_news", "list_calendar"):
+        row = tools.get(name)
+        if not isinstance(row, dict):
+            continue
+        extra = ""
+        if row.get("has_more") is not None:
+            extra = f"，has_more={row.get('has_more')}"
+        lines.append(f"- {name}：{'可用' if row.get('ok') else '失败'}，条数 {fmt(row.get('count'))}{extra}")
+    return lines
+
+
 def render(snapshot):
     meta = snapshot.get("metadata") or {}
     normalized = snapshot.get("normalized") or {}
@@ -136,13 +206,21 @@ def render(snapshot):
     ma20 = tech.get("ma20")
     open_interest = quote.get("open_interest")
     fundamentals_text = fundamental_lines(snapshot)
+    news_text = news_lines(snapshot)
 
     lines = [
         f"# 中国期货日报：{instrument}（{meta.get('analysis_date', '未知日期')}）",
         "",
         f"> 数据完整度：{quality(snapshot)}",
+        f"> 有效行情日期：{meta.get('effective_market_date') or meta.get('analysis_date', '未知日期')}",
         "> 本内容仅供研究辅助，不构成投资建议。",
         "",
+    ]
+    if snapshot.get("warnings"):
+        lines.extend(["## 数据提示"])
+        lines.extend(f"- {item}" for item in snapshot.get("warnings") or [])
+        lines.append("")
+    lines.extend([
         "## 1. 核心结论",
         f"- 方向判断：{bias}",
         f"- 置信度：{confidence(snapshot)}",
@@ -173,7 +251,8 @@ def render(snapshot):
         "## 4. 基本面与资金",
         *fundamentals_text,
         f"- 成交持仓：当前持仓 {fmt(open_interest)}，结合价格位置判断资金确认度。",
-        "- 新闻与宏观：本地脚本不自动编写新闻结论；需要使用当前、可引用来源补充。",
+        "- 新闻与宏观：",
+        *news_text,
         "",
         "## 5. 研究观点",
         f"- 多头逻辑：若价格守住 {fmt(support)} 并重新站上 {fmt(ma5)}，低位修复可能延续。",
@@ -190,11 +269,13 @@ def render(snapshot):
         "- 不参与条件：临近重大公告、夜盘波动异常、产业消息未确认、数据缺口影响方向判断。",
         "",
         "## 7. 数据缺口",
-    ]
+    ])
     if missing:
         lines.extend(f"- {item}" for item in missing)
     else:
         lines.append("- 暂无关键缺口。")
+    lines.extend(supplement_error_lines(snapshot))
+    lines.extend(news_coverage_lines(snapshot))
     lines.extend(["", "## 8. 数据源状态"])
     lines.append("- 可用：" + ("、".join(useful_sources) if useful_sources else "无"))
     if degraded_sources:

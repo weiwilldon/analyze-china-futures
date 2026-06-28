@@ -11,3 +11,9 @@ report*.md
 .venv/
 venv/
 node_modules/
+
+# Keep manual supplement examples, but do not commit real exported data.
+manual-data/*
+!manual-data/README.md
+!manual-data/templates/
+!manual-data/templates/*.csv

@@ -1,0 +1,2 @@
+date,var,product,warehouse,warehouse_code,receipt,change,source,note
+2026-06-26,AO,氧化铝,example warehouse,EXAMPLE,123,0,manual_export,example only

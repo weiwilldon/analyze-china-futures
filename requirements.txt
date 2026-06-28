@@ -1,0 +1,9 @@
+akshare
+beautifulsoup4
+lxml
+numpy
+openpyxl
+pandas
+tqsdk
+tushare
+xlrd

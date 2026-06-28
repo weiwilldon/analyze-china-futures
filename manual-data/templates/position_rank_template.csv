@@ -1,0 +1,2 @@
+date,var,product,rank,vol_party_name,vol,vol_chg,long_party_name,long_open_interest,long_open_interest_chg,short_party_name,short_open_interest,short_open_interest_chg,source,note
+2026-06-26,JM,焦煤,1,example member,1000,10,example long member,600,5,example short member,550,-3,manual_export,example only

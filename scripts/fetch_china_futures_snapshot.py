@@ -86,6 +86,10 @@ PRODUCTS.update(
         "jm": ("JM", "DCE", "jm"),
         "j": ("J", "DCE", "j"),
         "lh": ("LH", "DCE", "lh"),
+        "jd": ("JD", "DCE", "jd"),
+        "y": ("Y", "DCE", "y"),
+        "p": ("P", "DCE", "p"),
+        "c": ("C", "DCE", "c"),
         "rb": ("RB", "SHFE", "rb"),
         "hc": ("HC", "SHFE", "hc"),
         "cu": ("CU", "SHFE", "cu"),
@@ -2044,6 +2048,8 @@ def jin10_keywords_for(normalized):
         "CU": ["\u94dc", "\u6709\u8272"],
         "AL": ["\u94dd", "\u6709\u8272"],
         "I": ["\u94c1\u77ff\u77f3", "\u94c1\u77ff"],
+        "JD": ["\u9e21\u86cb"],
+        "LH": ["\u751f\u732a"],
     }.get(code, [normalized.get("input") or code])
 
 

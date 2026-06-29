@@ -268,6 +268,37 @@ def exact_contract_normalization_check():
     }
 
 
+def product_alias_and_news_keyword_check():
+    spec = importlib.util.spec_from_file_location("fetch_snapshot", SCRIPTS / "fetch_china_futures_snapshot.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    jd = module.normalize_instrument("JD")
+    lh = module.normalize_instrument("LH")
+    jd_keywords = module.jin10_keywords_for(jd)
+    lh_keywords = module.jin10_keywords_for(lh)
+    ok = (
+        jd.get("exchange") == "DCE"
+        and jd.get("tq_symbol") == "KQ.m@DCE.jd"
+        and "鸡蛋" in jd_keywords
+        and lh.get("exchange") == "DCE"
+        and "生猪" in lh_keywords
+    )
+    return {
+        "cmd": "product_alias_and_news_keyword_check",
+        "returncode": 0 if ok else 1,
+        "stdout": json.dumps(
+            {
+                "JD": jd,
+                "JD_keywords": jd_keywords,
+                "LH": lh,
+                "LH_keywords": lh_keywords,
+            },
+            ensure_ascii=False,
+        ),
+        "stderr": "" if ok else "JD/LH aliases or Jin10 keywords are wrong",
+    }
+
+
 def intraday_watch_batch_check():
     path = SCRIPTS / "fetch_intraday_watch.py"
     if not path.exists():
@@ -342,6 +373,7 @@ def main():
     checks.append(manual_chinese_export_check())
     checks.append(exchange_probe_challenge_check())
     checks.append(exact_contract_normalization_check())
+    checks.append(product_alias_and_news_keyword_check())
     checks.append(intraday_watch_batch_check())
     checks.append(run([sys.executable, str(SCRIPTS / "audit_completion_status.py"), "FG", "JM", "AO", "--date", "2026-06-28", "--no-jin10", "--json"], timeout=180))
 

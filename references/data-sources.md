@@ -9,6 +9,14 @@ For a field-by-field list of ready-made resources that fill basis, warehouse rec
 3. Use official exchange websites or current web sources for announcements, inventory, warehouse receipts, and news when the user needs those fields and scripts do not provide them.
 4. If no reliable source returns a field, set it to missing and explain the impact. Never backfill with guessed values.
 
+## Intraday Watch Mode
+
+- Use `scripts/fetch_intraday_watch.py` for short-term monitoring, heartbeat checks, and "entry point now?" questions.
+- This mode is intentionally quote-only: one TqSdk session fetches all requested instruments in a batch and skips AKShare, 100ppi, exchange warehouse receipts, member positions, Tushare, and Jin10.
+- Treat it as fast but narrow. It can support short-term trigger/stop discussion from last price, bid/ask, high/low, volume, and open interest, but it must not be presented as a full research report.
+- If TqSdk is unavailable or returns missing fields, keep `quote.*` as `null`, surface `missing_reasons`, and either ask the user for a quote screenshot/manual price or fall back to the full snapshot only when speed is not critical.
+- Keep stdout machine-readable JSON. Third-party TqSdk logs and warnings belong on stderr so automations can parse `result.instruments[*].quote`.
+
 ## TqSdk Handling
 
 - Detect TqSdk by import, not by assuming installation.

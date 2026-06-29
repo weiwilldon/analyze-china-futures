@@ -11,6 +11,11 @@ import tempfile
 from pathlib import Path
 
 
+if hasattr(sys.stdout, "reconfigure"):
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+if hasattr(sys.stderr, "reconfigure"):
+    sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPTS = ROOT / "scripts"
 
@@ -226,6 +231,87 @@ def exchange_probe_challenge_check():
     }
 
 
+def exact_contract_normalization_check():
+    spec = importlib.util.spec_from_file_location("fetch_snapshot", SCRIPTS / "fetch_china_futures_snapshot.py")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    normalized = module.normalize_instrument("LH2609")
+    snapshot = {
+        "quote": {},
+        "daily_bars": [
+            {
+                "date": "2026-06-26",
+                "open": 12200,
+                "high": 12300,
+                "low": 12100,
+                "close": 12280,
+                "volume": 10,
+                "hold": 11,
+                "settle": 12270,
+            }
+        ],
+        "metadata": {"analysis_date": "2026-06-29"},
+        "normalized": normalized,
+    }
+    module.fill_quote_from_daily_bars(snapshot)
+    quote = snapshot["quote"]
+    ok = (
+        normalized.get("exchange") == "DCE"
+        and normalized.get("tq_symbol") == "DCE.lh2609"
+        and quote.get("contract") == "LH2609"
+    )
+    return {
+        "cmd": "exact_contract_normalization_check",
+        "returncode": 0 if ok else 1,
+        "stdout": json.dumps({"normalized": normalized, "quote": quote}, ensure_ascii=False),
+        "stderr": "" if ok else "LH2609 exact contract mapping or fallback contract label is wrong",
+    }
+
+
+def intraday_watch_batch_check():
+    path = SCRIPTS / "fetch_intraday_watch.py"
+    if not path.exists():
+        return {
+            "cmd": "intraday_watch_batch_check",
+            "returncode": 1,
+            "stdout": "",
+            "stderr": "fetch_intraday_watch.py is missing",
+        }
+    spec = importlib.util.spec_from_file_location("fetch_intraday_watch", path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    def fake_fetch(symbols, wait_seconds):
+        return {
+            symbol: {
+                "contract": symbol,
+                "last": 1000 + index,
+                "open": 990 + index,
+                "high": 1005 + index,
+                "low": 985 + index,
+                "volume": 10000 + index,
+                "open_interest": 20000 + index,
+                "source": "fake",
+            }
+            for index, symbol in enumerate(symbols)
+        }
+
+    snapshot = module.build_watch_snapshot(["焦煤", "玻璃"], wait_seconds=0, fetcher=fake_fetch)
+    instruments = snapshot.get("instruments") or []
+    ok = (
+        snapshot.get("metadata", {}).get("mode") == "intraday_watch"
+        and len(instruments) == 2
+        and all((item.get("quote") or {}).get("last") is not None for item in instruments)
+        and all("fundamentals" not in item and "news" not in item for item in instruments)
+    )
+    return {
+        "cmd": "intraday_watch_batch_check",
+        "returncode": 0 if ok else 1,
+        "stdout": json.dumps(snapshot, ensure_ascii=False),
+        "stderr": "" if ok else "intraday watch snapshot did not provide compact batch quotes",
+    }
+
+
 def main():
     parser = argparse.ArgumentParser(description="Run a quick skill validation.")
     parser.add_argument("--instrument", default="FG", help="Instrument/code for snapshot smoke test.")
@@ -245,6 +331,7 @@ def main():
         "diagnose_data_readiness.py",
         "prepare_manual_data_requests.py",
         "audit_completion_status.py",
+        "fetch_intraday_watch.py",
     ):
         checks.append(run([sys.executable, "-m", "py_compile", str(SCRIPTS / script)], timeout=30))
 
@@ -254,6 +341,8 @@ def main():
     checks.append(manual_request_source_hint_check())
     checks.append(manual_chinese_export_check())
     checks.append(exchange_probe_challenge_check())
+    checks.append(exact_contract_normalization_check())
+    checks.append(intraday_watch_batch_check())
     checks.append(run([sys.executable, str(SCRIPTS / "audit_completion_status.py"), "FG", "JM", "AO", "--date", "2026-06-28", "--no-jin10", "--json"], timeout=180))
 
     with tempfile.TemporaryDirectory() as tmp:

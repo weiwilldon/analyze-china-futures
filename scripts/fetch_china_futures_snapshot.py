@@ -55,6 +55,7 @@ PRODUCTS = {
     "棕榈油": ("P", "DCE", "p"),
     "玉米": ("C", "DCE", "c"),
     "鸡蛋": ("JD", "DCE", "jd"),
+    "生猪": ("LH", "DCE", "lh"),
     "玻璃": ("FG", "CZCE", "fg"),
     "纯碱": ("SA", "CZCE", "sa"),
     "白糖": ("SR", "CZCE", "sr"),
@@ -84,6 +85,7 @@ PRODUCTS.update(
         "oi": ("OI", "CZCE", "oi"),
         "jm": ("JM", "DCE", "jm"),
         "j": ("J", "DCE", "j"),
+        "lh": ("LH", "DCE", "lh"),
         "rb": ("RB", "SHFE", "rb"),
         "hc": ("HC", "SHFE", "hc"),
         "cu": ("CU", "SHFE", "cu"),
@@ -419,6 +421,7 @@ def fetch_with_tqsdk(snapshot, normalized, want_tq=True):
     try:
         api = TqApi(auth=TqAuth(os.getenv("TQSDK_USER"), os.getenv("TQSDK_PASSWORD")))
         quote = api.get_quote(symbol)
+        klines = api.get_kline_serial(symbol, 24 * 60 * 60, data_length=80)
         api.wait_update(deadline=time.time() + 5)
         snapshot["quote"].update(
             {
@@ -426,12 +429,18 @@ def fetch_with_tqsdk(snapshot, normalized, want_tq=True):
                 "last": as_float(getattr(quote, "last_price", None)),
                 "change": as_float(getattr(quote, "change", None)),
                 "change_pct": as_float(getattr(quote, "change_percent", None)),
+                "open": as_float(getattr(quote, "open", None)),
+                "high": as_float(getattr(quote, "highest", None)),
+                "low": as_float(getattr(quote, "lowest", None)),
                 "volume": as_float(getattr(quote, "volume", None)),
                 "open_interest": as_float(getattr(quote, "open_interest", None)),
                 "settlement": as_float(getattr(quote, "settlement", None)),
                 "source": "TqSdk",
             }
         )
+        records = tqsdk_kline_records(klines)
+        if records:
+            snapshot["daily_bars"] = records
         snapshot["data_source_status"]["tqsdk"] = "ok"
     except Exception as exc:
         snapshot["data_source_status"]["tqsdk"] = f"failed: {exc}"
@@ -441,6 +450,40 @@ def fetch_with_tqsdk(snapshot, normalized, want_tq=True):
                 api.close()
             except Exception:
                 pass
+
+
+def tqsdk_datetime_to_date(value):
+    numeric = as_float(value)
+    if numeric is None:
+        return None
+    try:
+        return dt.datetime.fromtimestamp(numeric / 1_000_000_000).date().isoformat()
+    except Exception:
+        return None
+
+
+def tqsdk_kline_records(klines):
+    records = frame_records(klines, limit=80)
+    out = []
+    for row in records:
+        close = as_float(row.get("close"))
+        if close is None:
+            continue
+        hold = as_float(row.get("close_oi"))
+        if hold is None:
+            hold = as_float(row.get("open_oi"))
+        item = {
+            "date": tqsdk_datetime_to_date(row.get("datetime")),
+            "open": as_float(row.get("open")),
+            "high": as_float(row.get("high")),
+            "low": as_float(row.get("low")),
+            "close": close,
+            "volume": as_float(row.get("volume")),
+            "hold": hold,
+        }
+        if item["date"]:
+            out.append(item)
+    return out
 
 
 def bar_date(row):
@@ -528,12 +571,22 @@ def fetch_with_akshare(snapshot, normalized):
 
     errors = []
     symbol = normalized["ak_symbol"]
+    exact_symbol = None
+    if normalized.get("is_exact_contract"):
+        exact_symbol = str(normalized.get("input") or "").strip()
+    quote_symbols = [symbol]
+    if exact_symbol:
+        quote_symbols = [exact_symbol, exact_symbol.lower(), exact_symbol.upper(), symbol]
 
-    candidates = [
-        ("futures_zh_spot", {"symbol": symbol, "market": "CF", "adjust": "0"}),
-        ("futures_zh_realtime", {"symbol": symbol}),
-        ("futures_main_sina", {"symbol": symbol}),
-    ]
+    candidates = []
+    for candidate_symbol in quote_symbols:
+        candidates.extend(
+            [
+                ("futures_zh_spot", {"symbol": candidate_symbol, "market": "CF", "adjust": "0"}),
+                ("futures_zh_realtime", {"symbol": candidate_symbol}),
+                ("futures_main_sina", {"symbol": candidate_symbol}),
+            ]
+        )
     for name, kwargs in candidates:
         func = getattr(ak, name, None)
         if not func:
@@ -549,10 +602,11 @@ def fetch_with_akshare(snapshot, normalized):
             snapshot["data_source_status"]["akshare"] = "ok"
             break
 
-    daily_candidates = [
-        ("futures_zh_daily_sina", {"symbol": symbol.lower() + "0"}),
-        ("futures_zh_daily_sina", {"symbol": symbol.upper() + "0"}),
-    ]
+    if exact_symbol:
+        daily_symbols = [exact_symbol.lower(), exact_symbol.upper()]
+    else:
+        daily_symbols = [symbol.lower() + "0", symbol.upper() + "0"]
+    daily_candidates = [("futures_zh_daily_sina", {"symbol": item}) for item in daily_symbols]
     for name, kwargs in daily_candidates:
         func = getattr(ak, name, None)
         if not func:
@@ -2616,9 +2670,12 @@ def enrich_quote_from_daily_bars(snapshot):
     if not values:
         return
     quote["daily_bar_date"] = values["date"]
-    quote["open"] = values["open"]
-    quote["high"] = values["high"]
-    quote["low"] = values["low"]
+    if quote.get("open") is None:
+        quote["open"] = values["open"]
+    if quote.get("high") is None:
+        quote["high"] = values["high"]
+    if quote.get("low") is None:
+        quote["low"] = values["low"]
     if quote.get("change") is None:
         quote["change"] = values["change"]
     if quote.get("change_pct") is None:
@@ -2641,9 +2698,12 @@ def fill_quote_from_daily_bars(snapshot):
     if not values:
         return
     normalized = snapshot.get("normalized") or {}
+    contract = normalized.get("input") if normalized.get("is_exact_contract") else None
+    if not contract:
+        contract = normalized.get("product_code") + " main/daily" if normalized.get("product_code") else None
     quote.update(
         {
-            "contract": normalized.get("product_code") + " main/daily" if normalized.get("product_code") else None,
+            "contract": contract,
             "last": values["close"],
             "change": values["change"],
             "change_pct": values["change_pct"],

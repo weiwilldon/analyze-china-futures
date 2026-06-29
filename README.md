@@ -74,6 +74,14 @@ Supported manual formats are `.json`, `.csv`, `.xls`, and `.xlsx`. Manual file n
 
 ## Direct Script Usage
 
+Fast intraday watch for short-term monitoring:
+
+```powershell
+py .\scripts\fetch_intraday_watch.py "焦煤" "玻璃" --wait-seconds 2 --format json
+```
+
+This path is TqSdk-only and quote-only. It skips AKShare, 100ppi, exchange warehouse/position data, Tushare, and Jin10 so heartbeat-style monitoring can finish quickly.
+
 Fetch a snapshot:
 
 ```powershell

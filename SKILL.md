@@ -1,6 +1,6 @@
 ---
 name: analyze-china-futures
-description: Analyze China futures markets and produce Markdown daily reports, research views, trade plans, and contract comparisons for China commodity futures, stock index futures, and user-specified futures varieties. Use when Codex needs to analyze today's China futures market, a named futures product such as 螺纹钢/沪铜/铁矿/豆粕/玻璃/焦煤/氧化铝, a contract code such as RB/CU/I/IF/FG/JM/AO, basis/inventory/open-interest context, technical levels, risk scenarios, or a research-backed trading plan.
+description: Analyze China futures markets and produce intraday watch snapshots, Markdown daily reports, research views, trade plans, and contract comparisons for China commodity futures, stock index futures, and user-specified futures varieties. Use when Codex needs to analyze today's China futures market, monitor short-term intraday entry points, a named futures product such as 螺纹钢/沪铜/铁矿/豆粕/玻璃/焦煤/氧化铝, a contract code such as RB/CU/I/IF/FG/JM/AO, basis/inventory/open-interest context, technical levels, risk scenarios, or a research-backed trading plan.
 ---
 
 # 中国期货分析助手
@@ -8,6 +8,16 @@ description: Analyze China futures markets and produce Markdown daily reports, r
 ## 核心流程
 
 使用本 Skill 分析用户指定的中国期货品种或合约。用户没有指定格式时，默认输出 Markdown 日报或简版研究报告。
+
+### 盘中盯盘快路径
+
+当用户要求“盘中”“盯盘”“每 5 分钟看一下”“有没有进场点”“短线点位”时，优先运行快速脚本，不要调用完整日报快照：
+
+```powershell
+py scripts/fetch_intraday_watch.py "焦煤" "玻璃" --wait-seconds 2 --format json
+```
+
+快路径只使用一次 TqSdk 批量连接抓取实时报价、买卖一档、日内高低点、成交量和持仓，跳过 AKShare、100ppi、交易所仓单/席位、Tushare 和 Jin10。它适合 5 分钟盯盘；若 TqSdk 不可用，明确说明快路径缺少实时行情，不要编造价格。完整复盘、日报、基本面、新闻或跨品种研究仍使用 `fetch_china_futures_snapshot.py`。
 
 1. 解析用户输入的品种、合约和日期；日期缺省时使用 Asia/Shanghai 当天。
 2. 读取 `references/data-sources.md`，优先使用可靠的实时或结构化数据，不用记忆和猜测补字段。
@@ -35,6 +45,12 @@ description: Analyze China futures markets and produce Markdown daily reports, r
 
 ```powershell
 py scripts/fetch_china_futures_snapshot.py "螺纹钢" --date 2026-06-26 --out snapshot.json
+```
+
+盘中快速盯盘：
+
+```powershell
+py scripts/fetch_intraday_watch.py "焦煤" "玻璃" --wait-seconds 2 --format json
 ```
 
 生成日报草稿：
@@ -107,6 +123,7 @@ py scripts/probe_jin10_sources.py FG JM AO
 - `references/optional-pro-sources.md`：Tushare Pro、Jin10 MCP、TqSdk 的可选增强配置。
 - `references/source-coverage-matrix.md`：字段覆盖范围和错误分类。
 - `references/analysis-playbook.md`：分析角色和推理检查表。
+- `references/usage-feedback.md`：实战盯盘后的缺点、缺漏和优化规则。
 - `references/report-template.md`：稳定 Markdown 日报模板。
 
 ## 2026-06 数据补源更新

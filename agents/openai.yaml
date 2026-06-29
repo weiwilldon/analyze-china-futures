@@ -1,6 +1,6 @@
 interface:
   display_name: "中国期货分析助手"
-  short_description: "分析中国期货行情并生成稳定 Markdown 日报"
-  default_prompt: "Use $analyze-china-futures to analyze today's selected China futures contract and produce a Markdown daily report."
+  short_description: "分析中国期货行情，支持盘中快照、日报、研究观点和交易计划"
+  default_prompt: "Use $analyze-china-futures to analyze today's selected China futures contract. For intraday watch requests, use the fast TqSdk watch path; for reports, produce a Markdown daily report."
 policy:
   allow_implicit_invocation: true
